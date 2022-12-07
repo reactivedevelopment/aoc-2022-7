@@ -1,143 +1,64 @@
 package com.adventofcode
 
-import com.adventofcode.ElvenFilesystem.addDirectory
-import com.adventofcode.ElvenFilesystem.addFile
-import com.adventofcode.ElvenFilesystem.listAllNestedDirectories
-import com.adventofcode.ElvenFilesystem.open
-import com.adventofcode.ElvenFilesystem.openParent
 import java.nio.file.Path
-import kotlin.io.path.createDirectory
 import kotlin.io.path.div
-import kotlin.io.path.exists
-import kotlin.io.path.notExists
 
-object ElvenFilesystem {
+private lateinit var pwd: Path
+private val dirToFiles = mutableMapOf<Path, Long>()
+private val dirToNested = mutableMapOf<Path, MutableSet<Path>>()
 
-  private lateinit var pwd: Path
-  private val dirToSize = mutableMapOf<String, Long>()
-  private val dirToChild = mutableMapOf<String, MutableSet<String>>()
-
-  fun open(directory: String) {
-    if (isRoot()) {
-      openRoot(directory)
-      dirToChild[canonicalPath()] = mutableSetOf()
-      return
-    }
-    openChild(directory)
-    dirToChild[canonicalPath()] = mutableSetOf()
-  }
-
-  private fun openChild(directory: String) {
-    val p = pwd / directory
-    dirToChild[canonicalPath()]!!.add(canonicalPath(p))
-    pwd /= directory
-    makeSureExists(pwd)
-  }
-
-  private fun isRoot(): Boolean {
-    return !::pwd.isInitialized
-  }
-
-  private fun openRoot(root: String) {
-    require(root == "/")
-    pwd = Path.of("root")
-    if (pwd.exists()) {
-      check(pwd.toFile().deleteRecursively())
-    }
-    makeSureExists(pwd)
-  }
-
-  fun addDirectory(directory: String) {
-    val path = pwd / directory
-    dirToChild[canonicalPath()]!!.add(canonicalPath(path))
-    makeSureExists(pwd / directory)
-  }
-
-  private fun makeSureExists(directory: Path) {
-    if (directory.notExists()) {
-      directory.createDirectory()
-    }
-  }
-
-  fun addFile(filename: String, size: Long) {
-    updateSize(size)
-    val path = pwd / filename
-    val file = path.toFile()
-    if (!file.exists()) {
-      file.writeText("$size")
-    }
-  }
-
-  private fun updateSize(size: Long) {
-    val path = canonicalPath()
-    dirToSize[path] = when (val prev = dirToSize[path]) {
-      null -> size
-      else -> prev + size
-    }
-  }
-
-  private fun canonicalPath(): String {
-    return canonicalPath(pwd)
-  }
-
-  private fun canonicalPath(p: Path): String {
-    return p.toString().removePrefix("root").ifEmpty { "/" }
-  }
-
-  fun openParent() {
-    pwd = pwd.parent
-  }
-
-  fun listAllNestedDirectories(): Map<String, Long> {
-    val result = mutableMapOf<String, Long>()
-    for((d, s) in dirToSize) {
-      result[d] = s + dirToChild[d]!!.sumOf { dirToSize[it]!! }
-    }
-    return result
-  }
-}
-
-fun execute(command: String) {
-  if (command == "ls") {
-    return // ls можно игнорировать
-  }
-  require(command.startsWith("cd "))
-  val directory = command.drop(3)
-  if (directory == "..") {
-    openParent()
-    return
-  }
-  open(directory)
-}
-
-fun parse(output: String) {
-  val (marker, name) = output.split(' ')
+fun processOutput(l: String) {
+  val (marker, name) = l.split(' ')
   if (marker == "dir") {
-    addDirectory(name)
+    dirToNested.getOrPut(pwd, ::mutableSetOf).add(pwd / name)
     return
   }
-  val size = marker.toLong()
-  addFile(name, size)
-}
-
-fun process(line: String) {
-  if (containsCommand(line)) {
-    execute(commandOf(line))
+  if (dirToFiles.contains(pwd)) {
+    dirToFiles[pwd] = dirToFiles[pwd]!! + marker.toLong()
     return
   }
-  parse(line)
+  dirToFiles[pwd] = marker.toLong()
 }
 
-fun containsCommand(line: String): Boolean {
-  return line.startsWith("$ ")
+fun processCode(l: String) {
+  if (l == "ls") {
+    return
+  }
+  require(l.startsWith("cd "))
+  val dir = l.removePrefix("cd ")
+  if (!::pwd.isInitialized) {
+    pwd = Path.of(dir)
+    return
+  }
+  if (dir == "..") {
+    pwd = pwd.parent
+    return
+  }
+  dirToNested.getOrPut(pwd, ::mutableSetOf).add(pwd / dir)
+  pwd /= dir
 }
 
-fun commandOf(line: String): String {
-  return line.drop(2)
+fun process(l: String) {
+  if (l.startsWith("$ ")) {
+    processCode(l.removePrefix("$ "))
+  } else {
+    processOutput(l)
+  }
+}
+
+fun calculateSize(dir: Path): Long {
+  val filesSize = dirToFiles[dir] ?: 0
+  val nestedDirs = dirToNested[dir] ?: emptySet()
+  return nestedDirs.sumOf(::calculateSize) + filesSize
 }
 
 fun solution(): Long {
-  return listAllNestedDirectories().values.filter { it <= 100000 }.sum()
+  val elapsed = calculateSize(Path.of("/"))
+  val free = 70_000_000 - elapsed
+  val lacks = 30_000_000 - free
+  val allDirs = dirToFiles.keys + dirToNested.keys
+  val candidatesToDelete = allDirs.map(::calculateSize).filter { it >= lacks }
+  return candidatesToDelete.min()
 }
 
 fun main() {
@@ -145,6 +66,5 @@ fun main() {
     .getResourceAsStream("/input")!!
     .bufferedReader()
     .forEachLine(::process)
-  println(listAllNestedDirectories())
   println(solution())
 }
